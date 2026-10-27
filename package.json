@@ -1,0 +1,8 @@
+{
+  "name": "deliveries-dashboard-standalone",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "vite build", "dev": "vite" },
+  "dependencies": { "react": "^19.2.0", "react-dom": "^19.2.0", "lucide-react": "^0.510.0" },
+  "devDependencies": { "vite": "^7.0.0", "@vitejs/plugin-react": "^5.0.0", "@tailwindcss/vite": "^4.1.0", "tailwindcss": "^4.1.0", "vite-plugin-singlefile": "^2.3.0", "typescript": "^5.7.0" }
+}
