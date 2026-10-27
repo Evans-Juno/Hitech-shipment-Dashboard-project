@@ -17,7 +17,7 @@ const SEA = [STAGES[0], STAGES[1]] as ArrivalStatus[];
 const PORT = [STAGES[2], STAGES[3], STAGES[4]] as ArrivalStatus[];
 const DONE = [STAGES[5]] as ArrivalStatus[];
 
-const BRIDGES = ["All bridges", "47+600", "63+700", "Crossbeam", "Others"] as const;
+const BRIDGES = ["All bridges", "47+600", "63+700", "Crossbeam", "Other"] as const;
 type Bridge = (typeof BRIDGES)[number];
 type BoardFilter = Board | "all";
 type View = "shipments" | "containers";
@@ -78,9 +78,9 @@ function stat(rows: Shipment[], statuses: ArrivalStatus[] | undefined, bridge: B
 }
 
 const STAGE_COLORS: Record<ArrivalStatus, string> = {
-  "Loaded from Departure Port": "#9cc1ee",
+  "Loaded from Departure Port": "#9cc9ee",
   "Vessel on Sea": "#1c6cb0",
-  "Arrived to Nigerian Port": "#080601",
+  "Arrived to Nigerian Port": "#f2c14e",
   "Unloaded": "#d99a1e",
   "Under Customs Clearance": "#94610a",
   "Customs Completed": "#1b7f4d",
