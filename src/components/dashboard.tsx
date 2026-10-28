@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type MouseEvent as RMouseEvent, type ReactNode } from "react";
 import logo from "@/assets/logo.jpg";
 import { ChevronDown, Copy, ExternalLink, PanelLeftClose, PanelLeftOpen, Search, Ship, X } from "lucide-react";
 import {
@@ -185,6 +185,10 @@ export function Dashboard() {
   const [sideOpen, setSideOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
   const [open, setOpen] = useState<Shipment | null>(null);
   const [copied, setCopied] = useState(false);
+  const [selShip, setSelShip] = useState<string[]>([]);
+  const [selCtr, setSelCtr] = useState<string[]>([]);
+  const [lastIdx, setLastIdx] = useState<number | null>(null);
+  const [compare, setCompare] = useState(false);
 
   const set = (patch: Partial<Filters>) => setF((p) => ({ ...p, ...patch }));
 
@@ -214,6 +218,59 @@ export function Dashboard() {
     return out;
   }, [rows, f.bridge, f.query]);
   const missing = rows.filter((r) => boxesFor(r, f.bridge).length === 0).length;
+
+  const shipKeys = rows.map((r) => r.id);
+  const ctrKeys = containerRows.map((c) => `${c.row.id}|${c.no}`);
+  const sel = view === "shipments" ? selShip : selCtr;
+  const setSel = view === "shipments" ? setSelShip : setSelCtr;
+  const keys = view === "shipments" ? shipKeys : ctrKeys;
+
+  function pick(e: RMouseEvent, key: string, i: number, onOpen: () => void) {
+    if (e.shiftKey && lastIdx !== null) {
+      const a = Math.min(lastIdx, i);
+      const b = Math.max(lastIdx, i);
+      setSel(Array.from(new Set([...sel, ...keys.slice(a, b + 1)])));
+    } else if (e.ctrlKey || e.metaKey || sel.length > 0) {
+      setSel(sel.includes(key) ? sel.filter((k) => k !== key) : [...sel, key]);
+    } else {
+      onOpen();
+      return;
+    }
+    setLastIdx(i);
+  }
+  function toggleBox(key: string, i: number) {
+    setSel(sel.includes(key) ? sel.filter((k) => k !== key) : [...sel, key]);
+    setLastIdx(i);
+  }
+  const allPicked = keys.length > 0 && keys.every((k) => sel.includes(k));
+  const toggleAll = () => setSel(allPicked ? sel.filter((k) => !keys.includes(k)) : Array.from(new Set([...sel, ...keys])));
+  const noSelect = (e: RMouseEvent) => {
+    if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault();
+  };
+  const rowCls = (picked: boolean) =>
+    `cursor-pointer border-t border-border hover:bg-surface-2 ${picked ? "bg-surface-2 shadow-[inset_4px_0_0_var(--color-primary)]" : "bg-surface"}`;
+
+  const cols: Col[] =
+    view === "shipments"
+      ? selShip.flatMap((id) => {
+          const s = shipments.find((x) => x.id === id);
+          return s ? [shipmentCol(s)] : [];
+        })
+      : selCtr.flatMap((k) => {
+          const [id, no] = k.split("|");
+          const s = shipments.find((x) => x.id === id);
+          return s ? [containerCol(no, s, k)] : [];
+        });
+  function removeCol(key: string) {
+    setSel(sel.filter((k) => k !== key));
+    if (sel.length <= 1) setCompare(false);
+  }
+  function clearSel() {
+    setSelShip([]);
+    setSelCtr([]);
+    setCompare(false);
+    setLastIdx(null);
+  }
 
   async function copyAll() {
     try {
@@ -349,14 +406,16 @@ export function Dashboard() {
           </section>
 
           <div className="mt-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="View">
-            <ViewTab active={view === "shipments"} onClick={() => setView("shipments")}>Shipments ({rows.length})</ViewTab>
-            <ViewTab active={view === "containers"} onClick={() => setView("containers")}>Containers ({containerRows.length})</ViewTab>
+            <ViewTab active={view === "shipments"} onClick={() => { setView("shipments"); setCompare(false); setLastIdx(null); }}>Shipments ({rows.length})</ViewTab>
+            <ViewTab active={view === "containers"} onClick={() => { setView("containers"); setCompare(false); setLastIdx(null); }}>Containers ({containerRows.length})</ViewTab>
             {view === "containers" && containerRows.length > 0 ? (
               <button type="button" onClick={copyAll} className="ml-auto inline-flex h-11 items-center gap-2 rounded-lg border border-border px-3 text-sm hover:bg-surface-2">
                 <Copy className="size-4" aria-hidden /> {copied ? "Copied" : "Copy numbers"}
               </button>
             ) : null}
           </div>
+
+          <p className="mt-2 text-xs text-muted">Tip: Ctrl+click rows (or tick the boxes) to pick several, Shift+click for a range, then press Compare.</p>
 
           <p className="mt-3 text-sm text-muted">
             {view === "shipments"
@@ -372,6 +431,7 @@ export function Dashboard() {
                 <table className="w-full text-left text-sm">
                   <thead className="bg-surface-2 text-xs tracking-wide text-muted uppercase">
                     <tr>
+                      <th className="w-10 px-3 py-3"><input type="checkbox" checked={allPicked} onChange={toggleAll} aria-label="Select all lines" /></th>
                       <th className="px-3 py-3 font-medium">Bridge</th>
                       <th className="px-3 py-3 font-medium">Shutter group</th>
                       <th className="px-3 py-3 font-medium">Invoice</th>
@@ -383,8 +443,11 @@ export function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row) => (
-                      <tr key={row.id} className="cursor-pointer border-t border-border bg-surface hover:bg-surface-2" onClick={() => setOpen(row)}>
+                    {rows.map((row, i) => (
+                      <tr key={row.id} className={rowCls(selShip.includes(row.id))} onMouseDown={noSelect} onClick={(e) => pick(e, row.id, i, () => setOpen(row))}>
+                        <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
+                          <input type="checkbox" checked={selShip.includes(row.id)} onChange={() => toggleBox(row.id, i)} aria-label={`Select ${row.group} ${row.bl}`} />
+                        </td>
                         <td className="max-w-44 px-3 py-3 align-top">{row.bridge}</td>
                         <td className="px-3 py-3 align-top">
                           <div>{row.group}</div>
@@ -413,9 +476,12 @@ export function Dashboard() {
               </div>
 
               <ul className="mt-3 flex flex-col gap-3 md:hidden">
-                {rows.map((row) => (
+                {rows.map((row, i) => (
                   <li key={row.id}>
-                    <button type="button" onClick={() => setOpen(row)} className="w-full rounded-xl border border-border bg-surface p-4 text-left">
+                    <label className="flex items-center gap-2 px-1 pb-1 text-sm text-muted">
+                      <input type="checkbox" checked={selShip.includes(row.id)} onChange={() => toggleBox(row.id, i)} /> Select to compare
+                    </label>
+                    <button type="button" onClick={() => setOpen(row)} className={`w-full rounded-xl border bg-surface p-4 text-left ${selShip.includes(row.id) ? "border-primary" : "border-border"}`}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="font-medium">{row.group}</p>
@@ -442,6 +508,7 @@ export function Dashboard() {
               <table className="w-full text-left text-sm">
                 <thead className="bg-surface-2 text-xs tracking-wide text-muted uppercase">
                   <tr>
+                    <th className="w-10 px-3 py-3"><input type="checkbox" checked={allPicked} onChange={toggleAll} aria-label="Select all containers" /></th>
                     <th className="px-3 py-3 font-medium">Container</th>
                     <th className="px-3 py-3 font-medium">Shutter group</th>
                     <th className="px-3 py-3 font-medium">Bill of lading</th>
@@ -450,8 +517,11 @@ export function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {containerRows.map(({ no, row }) => (
-                    <tr key={`${row.id}-${no}`} className="cursor-pointer border-t border-border bg-surface hover:bg-surface-2" onClick={() => setOpen(row)}>
+                  {containerRows.map(({ no, row }, i) => (
+                    <tr key={`${row.id}-${no}`} className={rowCls(selCtr.includes(`${row.id}|${no}`))} onMouseDown={noSelect} onClick={(e) => pick(e, `${row.id}|${no}`, i, () => setOpen(row))}>
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" checked={selCtr.includes(`${row.id}|${no}`)} onChange={() => toggleBox(`${row.id}|${no}`, i)} aria-label={`Select ${no}`} />
+                      </td>
                       <td className="px-3 py-2.5 font-mono text-xs font-medium whitespace-nowrap">{no}</td>
                       <td className="px-3 py-2.5">{row.group}</td>
                       <td className="px-3 py-2.5 font-mono text-xs">{row.bl}</td>
@@ -465,6 +535,22 @@ export function Dashboard() {
           )}
         </main>
       </div>
+
+      {sel.length > 0 ? (
+        <div className="fixed inset-x-0 bottom-4 z-30 flex justify-center px-4">
+          <div className="flex items-center gap-2 rounded-xl border border-border bg-surface p-2 shadow-lg">
+            <span className="px-2 text-sm font-medium">{sel.length} selected</span>
+            <button type="button" onClick={() => setCompare(true)} disabled={cols.length === 0} className="h-11 rounded-lg bg-primary px-4 text-sm font-medium text-primary-ink">
+              Compare side by side
+            </button>
+            <button type="button" onClick={clearSel} className="h-11 rounded-lg border border-border px-3 text-sm hover:bg-surface-2">
+              Clear
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {compare && cols.length > 0 ? <CompareModal cols={cols} onRemove={removeCol} onClose={() => setCompare(false)} /> : null}
 
       {open ? <Detail shipment={open} onClose={() => setOpen(null)} /> : null}
     </div>
@@ -615,6 +701,147 @@ function Detail({ shipment, onClose }: { shipment: Shipment; onClose: () => void
           <p className="mt-5 text-sm text-muted">No public tracking link on file.</p>
         )}
       </article>
+    </div>
+  );
+}
+
+type Cell = { label: string; t: string; n?: ReactNode };
+type Col = { key: string; title: string; sub: string; cells: Cell[] };
+
+const mono = (v: string) => <span className="font-mono text-xs break-all">{v}</span>;
+const trackCell = (url: string | null | undefined): Cell => ({
+  label: "Tracking",
+  t: url ?? "—",
+  n: url ? (
+    <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
+      Open <ExternalLink className="size-3.5" />
+    </a>
+  ) : (
+    "—"
+  ),
+});
+
+function shipmentCol(s: Shipment): Col {
+  const all = s.boxes ?? [];
+  const c47 = s.boxes47 ?? [];
+  return {
+    key: s.id,
+    title: s.group,
+    sub: s.bl,
+    cells: [
+      { label: "Bridge", t: s.bridge },
+      { label: "Type", t: s.type },
+      { label: "Commercial invoice", t: s.invoice, n: mono(s.invoice) },
+      { label: "Bill of lading", t: s.bl, n: mono(s.bl) },
+      { label: "Status", t: s.status, n: <StatusPill status={s.status} /> },
+      { label: "Expected", t: formatDate(s.expected) },
+      { label: "Actual", t: formatDate(s.actual) },
+      { label: "Containers", t: String(s.containers) },
+      { label: "Container numbers", t: all.join(", ") || "—", n: all.length ? <Chips list={all} /> : "—" },
+      { label: "47+600 containers", t: c47.join(", ") || "—", n: c47.length ? <Chips list={c47} strong /> : "—" },
+      trackCell(s.tracking),
+      { label: "Note", t: s.note || "—" },
+    ],
+  };
+}
+
+function containerCol(no: string, s: Shipment, key: string): Col {
+  const in47 = (s.boxes47 ?? []).includes(no);
+  return {
+    key,
+    title: no,
+    sub: s.group,
+    cells: [
+      { label: "Container number", t: no, n: <span className="font-mono text-sm font-semibold">{no}</span> },
+      { label: "Shutter group", t: s.group },
+      { label: "Bill of lading", t: s.bl, n: mono(s.bl) },
+      { label: "Commercial invoice", t: s.invoice, n: mono(s.invoice) },
+      { label: "Status", t: s.status, n: <StatusPill status={s.status} /> },
+      { label: "Expected", t: formatDate(s.expected) },
+      { label: "Actual", t: formatDate(s.actual) },
+      { label: "Bridge", t: s.bridge },
+      { label: "Allocated to 47+600", t: in47 ? "Yes" : "No" },
+      { label: "Containers on this bill", t: String(s.containers) },
+      trackCell(s.tracking),
+    ],
+  };
+}
+
+function CompareModal({ cols, onRemove, onClose }: { cols: Col[]; onRemove: (key: string) => void; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function copy() {
+    const lines = [["", ...cols.map((c) => c.title)].join("\t")];
+    cols[0].cells.forEach((cell, i) => lines.push([cell.label, ...cols.map((c) => c.cells[i].t.replace(/\s+/g, " "))].join("\t")));
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* clipboard can be blocked inside embedded pages */
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3" onClick={onClose}>
+      <section
+        className="flex max-h-[92vh] w-fit max-w-full flex-col overflow-hidden rounded-2xl border border-border bg-surface"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Side-by-side comparison"
+      >
+        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <h2 className="text-lg font-semibold">Comparing {cols.length}</h2>
+          <button type="button" onClick={copy} className="ml-auto inline-flex h-11 items-center gap-2 rounded-lg border border-border px-3 text-sm hover:bg-surface-2">
+            <Copy className="size-4" aria-hidden /> {copied ? "Copied" : "Copy as table"}
+          </button>
+          <button type="button" onClick={onClose} className="grid size-11 place-items-center rounded-lg border border-border" aria-label="Close">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="overflow-auto">
+          <table className="border-collapse text-left text-sm">
+            <thead>
+              <tr>
+                <th className="sticky top-0 left-0 z-20 min-w-36 bg-surface-2 px-3 py-3" />
+                {cols.map((c) => (
+                  <th key={c.key} className="sticky top-0 z-10 min-w-56 max-w-72 border-l border-border bg-surface-2 px-3 py-3 align-top">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-semibold break-words">{c.title}</p>
+                        <p className="text-xs font-normal break-all text-muted">{c.sub}</p>
+                      </div>
+                      <button type="button" onClick={() => onRemove(c.key)} className="grid size-8 shrink-0 place-items-center rounded-md border border-border bg-surface" aria-label={`Remove ${c.title}`}>
+                        <X className="size-3.5" />
+                      </button>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {cols[0].cells.map((cell, i) => (
+                <tr key={cell.label} className="border-t border-border">
+                  <th className="sticky left-0 z-10 bg-surface px-3 py-2.5 align-top text-xs font-medium text-muted">{cell.label}</th>
+                  {cols.map((c) => (
+                    <td key={c.key} className="border-l border-border px-3 py-2.5 align-top break-words">
+                      {c.cells[i].n ?? c.cells[i].t}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
