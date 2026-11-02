@@ -1,5 +1,5 @@
 export const STAGES = [
-  "Loaded from Departure Port",
+  "At Departure Port",
   "Vessel on Sea",
   "Arrived to Nigerian Port",
   "Unloaded",
@@ -422,7 +422,7 @@ const snapshotRaw: Shipment[] = [
     bl: "(No BL yet)",
     containers: 11,
     expected: "2026-11-08",
-    status: "Loaded from Departure Port",
+    status: "At Departure Port",
     actual: null,
     tracking: null,
     note: "MDINA status: Confirmed. Bill of lading not issued.",

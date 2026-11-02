@@ -106,7 +106,7 @@ function stat(rows: Shipment[], statuses: ArrivalStatus[] | undefined, bridge: B
 }
 
 const STAGE_COLORS: Record<ArrivalStatus, string> = {
-  "Loaded from Departure Port": "#9cc9ee",
+  "At Departure Port": "#9cc9ee",
   "Vessel on Sea": "#1c6cb0",
   "Arrived to Nigerian Port": "#f2c14e",
   "Unloaded": "#d99a1e",
