@@ -301,7 +301,7 @@ export function Dashboard() {
           </button>
           <img src={logo} alt="Hitech" className="size-12 shrink-0 rounded-md bg-white sm:size-14" />
           <div className="min-w-0">
-            <p className="hidden text-xs font-medium tracking-[0.18em] text-white/80 uppercase sm:block">Hi-Tech · Bridges Division</p>
+            <p className="hidden text-xs font-medium tracking-[0.18em] text-white/80 uppercase sm:block">Hi-Tech · Bridge Division-Planning Department</p>
             <h1 className="truncate text-lg font-semibold sm:text-2xl">Medina / UniSpan deliveries</h1>
             <p className="truncate text-xs text-white/85 sm:text-sm">{PROJECT} · status as of {AS_OF}</p>
           </div>
