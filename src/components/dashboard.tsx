@@ -28,7 +28,34 @@ type Filters = {
   status: ArrivalStatus | "All";
   group: string;
   query: string;
+  recent: boolean;
 };
+
+const RECENT_DAYS = 7;
+const NO_FILTERS: Filters = { board: "all", bridge: "All bridges", status: "All", group: "All", query: "", recent: false };
+
+/** Days since the shipment reached Nigeria (status "Arrived to Nigerian Port" or later), using the Actual date. */
+function daysSinceArrival(s: Shipment): number | null {
+  if (STAGES.indexOf(s.status) < 2 || !s.actual) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s.actual);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.round((today.getTime() - d.getTime()) / 86400000);
+  return diff >= 0 ? diff : null;
+}
+
+function isRecent(s: Shipment) {
+  const d = daysSinceArrival(s);
+  return d !== null && d <= RECENT_DAYS;
+}
+
+function agoText(s: Shipment) {
+  const d = daysSinceArrival(s);
+  if (d === null || d > RECENT_DAYS) return null;
+  return d === 0 ? "today" : d === 1 ? "1 day ago" : `${d} days ago`;
+}
 
 function bridgeTags(s: Shipment): Bridge[] {
   const tags = new Set<Bridge>();
@@ -60,6 +87,7 @@ function matches(s: Shipment, f: Filters, skip?: keyof Filters) {
   if (skip !== "bridge" && f.bridge !== "All bridges" && !bridgeTags(s).includes(f.bridge)) return false;
   if (skip !== "status" && f.status !== "All" && s.status !== f.status) return false;
   if (skip !== "group" && f.group !== "All" && s.group !== f.group) return false;
+  if (skip !== "recent" && f.recent && !isRecent(s)) return false;
   const q = f.query.trim().toLowerCase();
   if (skip !== "query" && q) {
     const hay = [s.bl, s.invoice, s.group, s.bridge, s.type, ...(s.boxes ?? [])].join(" ").toLowerCase();
@@ -180,7 +208,7 @@ function StatusCard({
 }
 
 export function Dashboard() {
-  const [f, setF] = useState<Filters>({ board: "all", bridge: "All bridges", status: "All", group: "All", query: "" });
+  const [f, setF] = useState<Filters>(NO_FILTERS);
   const [view, setView] = useState<View>("shipments");
   const [sideOpen, setSideOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1024);
   const [open, setOpen] = useState<Shipment | null>(null);
@@ -199,8 +227,8 @@ export function Dashboard() {
   const group = groups.includes(f.group) ? f.group : "All";
   const fx: Filters = { ...f, group };
 
-  const rows = useMemo(() => shipments.filter((s) => matches(s, fx)), [fx.board, fx.bridge, fx.status, fx.group, fx.query]);
-  const scoped = useMemo(() => shipments.filter((s) => matches(s, fx, "status")), [fx.board, fx.bridge, fx.group, fx.query]);
+  const rows = useMemo(() => shipments.filter((s) => matches(s, fx)), [fx.board, fx.bridge, fx.status, fx.group, fx.query, fx.recent]);
+  const scoped = useMemo(() => shipments.filter((s) => matches(s, fx, "status")), [fx.board, fx.bridge, fx.group, fx.query, fx.recent]);
 
   const totals = stat(scoped, undefined, f.bridge);
   const done = stat(scoped, DONE, f.bridge);
@@ -282,8 +310,10 @@ export function Dashboard() {
     }
   }
 
-  const anyFilter = f.board !== "all" || f.bridge !== "All bridges" || f.status !== "All" || group !== "All" || f.query !== "";
-  const title = [f.bridge === "All bridges" ? "All bridges" : `Bridge ${f.bridge}`, f.board === "all" ? "both boards" : f.board === "iconic" ? "Iconic Bridges" : "General Shutter"].join(" · ");
+  const anyFilter = f.board !== "all" || f.bridge !== "All bridges" || f.status !== "All" || group !== "All" || f.query !== "" || f.recent;
+  const title = [f.bridge === "All bridges" ? "All bridges" : `Bridge ${f.bridge}`, f.board === "all" ? "both boards" : f.board === "iconic" ? "Iconic Bridges" : "General Shutter", ...(f.recent ? [`arrived in the last ${RECENT_DAYS} days`] : [])].join(" · ");
+  const recentList = shipments.filter((s) => matches(s, fx, "recent") && isRecent(s));
+  const anyList = shipments.filter((s) => matches(s, fx, "recent"));
 
   return (
     <div className="min-h-screen bg-bg text-fg">
@@ -301,7 +331,7 @@ export function Dashboard() {
           </button>
           <img src={logo} alt="Hitech" className="size-12 shrink-0 rounded-md bg-white sm:size-14" />
           <div className="min-w-0">
-            <p className="hidden text-xs font-medium tracking-[0.18em] text-white/80 uppercase sm:block">Hi-Tech · Bridge Division-Planning Department</p>
+            <p className="hidden text-xs font-medium tracking-[0.18em] text-white/80 uppercase sm:block">Hi-Tech · Bridges Division</p>
             <h1 className="truncate text-lg font-semibold sm:text-2xl">Medina / UniSpan deliveries</h1>
             <p className="truncate text-xs text-white/85 sm:text-sm">{PROJECT} · status as of {AS_OF}</p>
           </div>
@@ -359,6 +389,17 @@ export function Dashboard() {
               })}
             </Section>
 
+            <Section title="Arrival date">
+              <Opt active={!f.recent} onClick={() => set({ recent: false })} label="Any time" count={String(anyList.length)} />
+              <Opt
+                active={f.recent}
+                onClick={() => set({ recent: true })}
+                label={`Arrived in last ${RECENT_DAYS} days`}
+                count={`${recentList.length} · ${sumCtr(recentList, f.bridge)} ctr`}
+              />
+              <p className="mt-1 px-1 text-xs text-muted">Counts shipments at or past “Arrived to Nigerian Port” whose Actual date is within the last {RECENT_DAYS} days.</p>
+            </Section>
+
             <Section title="Shipment status">
               {(["All", ...STAGES] as Array<ArrivalStatus | "All">).map((st) => {
                 const n = shipments.filter((s) => matches(s, fx, "status") && (st === "All" || s.status === st)).length;
@@ -384,7 +425,7 @@ export function Dashboard() {
             {anyFilter ? (
               <button
                 type="button"
-                onClick={() => setF({ board: "all", bridge: "All bridges", status: "All", group: "All", query: "" })}
+                onClick={() => setF(NO_FILTERS)}
                 className="mt-2 h-11 w-full rounded-lg border border-border text-sm font-medium hover:bg-surface-2"
               >
                 Clear all filters
@@ -408,6 +449,14 @@ export function Dashboard() {
           <div className="mt-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="View">
             <ViewTab active={view === "shipments"} onClick={() => { setView("shipments"); setCompare(false); setLastIdx(null); }}>Shipments ({rows.length})</ViewTab>
             <ViewTab active={view === "containers"} onClick={() => { setView("containers"); setCompare(false); setLastIdx(null); }}>Containers ({containerRows.length})</ViewTab>
+            <button
+              type="button"
+              onClick={() => set({ recent: !f.recent })}
+              aria-pressed={f.recent}
+              className={`h-11 rounded-lg border px-4 text-sm font-medium ${f.recent ? "border-arrived bg-arrived-bg text-arrived" : "border-border bg-bg text-fg hover:border-muted"}`}
+            >
+              Arrived in last {RECENT_DAYS} days ({recentList.length})
+            </button>
             {view === "containers" && containerRows.length > 0 ? (
               <button type="button" onClick={copyAll} className="ml-auto inline-flex h-11 items-center gap-2 rounded-lg border border-border px-3 text-sm hover:bg-surface-2">
                 <Copy className="size-4" aria-hidden /> {copied ? "Copied" : "Copy numbers"}
@@ -459,7 +508,10 @@ export function Dashboard() {
                         <td className="px-3 py-3 align-top font-mono text-xs">{row.bl}</td>
                         <td className="px-3 py-3 align-top whitespace-nowrap">{formatDate(row.expected)}</td>
                         <td className="px-3 py-3 align-top"><StatusPill status={row.status} /></td>
-                        <td className="px-3 py-3 align-top whitespace-nowrap">{formatDate(row.actual)}</td>
+                        <td className="px-3 py-3 align-top whitespace-nowrap">
+                          {formatDate(row.actual)}
+                          {agoText(row) ? <div className="text-xs text-arrived">{agoText(row)}</div> : null}
+                        </td>
                         <td className="px-3 py-3 align-top" onClick={(e) => e.stopPropagation()}>
                           {row.tracking ? (
                             <a href={row.tracking} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
@@ -491,7 +543,7 @@ export function Dashboard() {
                       </div>
                       <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                         <div><dt className="text-xs text-muted">Expected</dt><dd>{formatDate(row.expected)}</dd></div>
-                        <div><dt className="text-xs text-muted">Actual</dt><dd>{formatDate(row.actual)}</dd></div>
+                        <div><dt className="text-xs text-muted">Actual</dt><dd>{formatDate(row.actual)}{agoText(row) ? <span className="ml-1 text-xs text-arrived">({agoText(row)})</span> : null}</dd></div>
                         <div><dt className="text-xs text-muted">Bridge</dt><dd>{row.bridge}</dd></div>
                         <div><dt className="text-xs text-muted">Containers</dt><dd>{ctrCount(row, f.bridge)}{ctrCount(row, f.bridge) !== row.containers ? ` of ${row.containers}` : ""}</dd></div>
                         <div className="col-span-2"><dt className="text-xs text-muted">Invoice</dt><dd className="font-mono text-xs">{row.invoice}</dd></div>
