@@ -120,6 +120,77 @@ function pct(n: number, total: number) {
   return `${v > 0 && v < 1 ? "<1" : Math.round(v)}%`;
 }
 
+/** One circular gauge showing a single stage's share of the total. */
+function Gauge({
+  stage,
+  n,
+  total,
+  unit,
+  active,
+  onPick,
+}: {
+  stage: ArrivalStatus;
+  n: number;
+  total: number;
+  unit: string;
+  active: boolean;
+  onPick: () => void;
+}) {
+  const size = 108;
+  const stroke = 10;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const share = total > 0 ? Math.min(1, Math.max(0, n / total)) : 0;
+  const dash = c * share;
+  const color = STAGE_COLORS[stage];
+
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      aria-pressed={active}
+      aria-label={`Filter by ${stage}: ${n} of ${total} ${unit} (${pct(n, total)})`}
+      className={`group flex flex-col items-center gap-1 rounded-lg p-1 text-center ${active ? "bg-surface-2 ring-1 ring-primary" : "hover:bg-surface-2"}`}
+    >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true" className="shrink-0">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-surface-2)" strokeWidth={stroke} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${c - dash}`}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+        <text
+          x={size / 2}
+          y={size / 2 + 2}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          className="fill-fg"
+          style={{ fontSize: 20, fontWeight: 600 }}
+        >
+          {pct(n, total)}
+        </text>
+        <text
+          x={size / 2}
+          y={size / 2 + 20}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          className="fill-muted"
+          style={{ fontSize: 10 }}
+        >
+          {n} of {total}
+        </text>
+      </svg>
+      <span className="max-w-28 text-xs leading-tight">{stage}</span>
+    </button>
+  );
+}
+
 function StatusCard({
   rows,
   bridge,
@@ -175,29 +246,17 @@ function StatusCard({
             </div>
           </div>
 
-          <div
-            className="mt-3 flex h-4 overflow-hidden rounded-full bg-surface-2"
-            role="img"
-            aria-label={parts.map((p) => `${p.st} ${pct(p.n, total)}`).join(", ")}
-          >
-            {parts.map((p) =>
-              p.n > 0 ? <div key={p.st} title={`${p.st}: ${p.n} ${unit} (${pct(p.n, total)})`} style={{ width: `${(p.n / total) * 100}%`, backgroundColor: STAGE_COLORS[p.st] }} /> : null,
-            )}
-          </div>
-
-          <ul className="mt-3 grid gap-1 sm:grid-cols-2 xl:grid-cols-3">
+          <ul className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
             {parts.map((p) => (
-              <li key={p.st}>
-                <button
-                  type="button"
-                  onClick={() => onPick(active === p.st ? "All" : p.st)}
-                  aria-pressed={active === p.st}
-                  className={`flex min-h-10 w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-sm ${active === p.st ? "bg-surface-2 font-medium ring-1 ring-primary" : "hover:bg-surface-2"}`}
-                >
-                  <span className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: STAGE_COLORS[p.st] }} aria-hidden />
-                  <span className="min-w-0 flex-1">{p.st}</span>
-                  <span className="shrink-0 text-xs text-muted">{p.n} · {pct(p.n, total)}</span>
-                </button>
+              <li key={p.st} className="flex">
+                <Gauge
+                  stage={p.st}
+                  n={p.n}
+                  total={total}
+                  unit={unit}
+                  active={active === p.st}
+                  onPick={() => onPick(active === p.st ? "All" : p.st)}
+                />
               </li>
             ))}
           </ul>
