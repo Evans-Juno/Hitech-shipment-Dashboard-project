@@ -22,19 +22,56 @@ type Bridge = (typeof BRIDGES)[number];
 type BoardFilter = Board | "all";
 type View = "shipments" | "containers";
 
+/** Four card groups. A group is a set of one or more of the six STAGES. */
+type GroupKey = "sea" | "port" | "customs" | "done";
+const CARD_GROUPS: Array<{ key: GroupKey; label: string; stages: ArrivalStatus[] }> = [
+  { key: "sea",     label: "Vessel on Sea",      stages: ["Vessel on Sea"] },
+  { key: "port",    label: "At Port",            stages: ["Arrived to Nigerian Port", "Unloaded"] },
+  { key: "customs", label: "In Customs",         stages: ["Under Customs Clearance"] },
+  { key: "done",    label: "Customs Completed",  stages: ["Customs Completed"] },
+];
+
+type StatusFilter = ArrivalStatus | GroupKey | "All";
+
 type Filters = {
   board: BoardFilter;
   bridge: Bridge;
-  status: ArrivalStatus | "All";
+  status: StatusFilter;
   group: string;
   query: string;
   recent: boolean;
+  overdue: boolean;
+  clearedRecent: boolean;
 };
 
 const RECENT_DAYS = 7;
-const NO_FILTERS: Filters = { board: "all", bridge: "All bridges", status: "All", group: "All", query: "", recent: false };
+const NO_FILTERS: Filters = {
+  board: "all",
+  bridge: "All bridges",
+  status: "All",
+  group: "All",
+  query: "",
+  recent: false,
+  overdue: false,
+  clearedRecent: false,
+};
 
-/** Days since the shipment reached Nigeria (status "Arrived to Nigerian Port" or later), using the Actual date. */
+/** Group a shipment belongs to on the card (or null if it is still at departure port). */
+function cardGroupOf(s: Shipment): GroupKey | null {
+  for (const g of CARD_GROUPS) if (g.stages.includes(s.status)) return g.key;
+  return null; // At Departure Port — not on the card
+}
+
+/** Does the given status filter match this shipment's status? */
+function statusMatches(s: Shipment, f: StatusFilter): boolean {
+  if (f === "All") return true;
+  if (f === "sea" || f === "port" || f === "customs" || f === "done") {
+    return cardGroupOf(s) === f;
+  }
+  return s.status === f;
+}
+
+/** Days since the shipment reached Nigeria (status at "Arrived to Nigerian Port" or later), using the Actual date. */
 function daysSinceArrival(s: Shipment): number | null {
   if (STAGES.indexOf(s.status) < 2 || !s.actual) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s.actual);
@@ -46,9 +83,36 @@ function daysSinceArrival(s: Shipment): number | null {
   return diff >= 0 ? diff : null;
 }
 
+/** Arrived in the last 7 days AND not yet cleared. Disjoint from clearedRecent. */
 function isRecent(s: Shipment) {
   const d = daysSinceArrival(s);
-  return d !== null && d <= RECENT_DAYS;
+  if (d === null || d > RECENT_DAYS) return false;
+  return s.status !== "Customs Completed";
+}
+
+/** Status = Customs Completed, and the Actual date is within the last 7 days. */
+function isClearedRecent(s: Shipment) {
+  if (s.status !== "Customs Completed") return false;
+  if (!s.actual) return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s.actual);
+  if (!m) return false;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.round((today.getTime() - d.getTime()) / 86400000);
+  return diff >= 0 && diff <= RECENT_DAYS;
+}
+
+/** Expected date has passed and status is still before "Arrived to Nigerian Port". */
+function isOverdue(s: Shipment) {
+  if (STAGES.indexOf(s.status) >= 2) return false;
+  if (!s.expected) return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s.expected);
+  if (!m) return false;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return d.getTime() < today.getTime();
 }
 
 function agoText(s: Shipment) {
@@ -85,9 +149,11 @@ function ctrCount(s: Shipment, bridge: Bridge) {
 function matches(s: Shipment, f: Filters, skip?: keyof Filters) {
   if (skip !== "board" && f.board !== "all" && s.board !== f.board) return false;
   if (skip !== "bridge" && f.bridge !== "All bridges" && !bridgeTags(s).includes(f.bridge)) return false;
-  if (skip !== "status" && f.status !== "All" && s.status !== f.status) return false;
+  if (skip !== "status" && !statusMatches(s, f.status)) return false;
   if (skip !== "group" && f.group !== "All" && s.group !== f.group) return false;
   if (skip !== "recent" && f.recent && !isRecent(s)) return false;
+  if (skip !== "overdue" && f.overdue && !isOverdue(s)) return false;
+  if (skip !== "clearedRecent" && f.clearedRecent && !isClearedRecent(s)) return false;
   const q = f.query.trim().toLowerCase();
   if (skip !== "query" && q) {
     const hay = [s.bl, s.invoice, s.group, s.bridge, s.type, ...(s.boxes ?? [])].join(" ").toLowerCase();
@@ -114,26 +180,37 @@ const STAGE_COLORS: Record<ArrivalStatus, string> = {
   "Customs Completed": "#1b7f4d",
 };
 
+const GROUP_COLORS: Record<GroupKey, string> = {
+  sea:     STAGE_COLORS["Vessel on Sea"],
+  port:    STAGE_COLORS["Arrived to Nigerian Port"],
+  customs: STAGE_COLORS["Under Customs Clearance"],
+  done:    STAGE_COLORS["Customs Completed"],
+};
+
 function pct(n: number, total: number) {
   if (total <= 0) return "0%";
   const v = (n / total) * 100;
   return `${v > 0 && v < 1 ? "<1" : Math.round(v)}%`;
 }
 
-/** One circular gauge showing a single stage's share of the total. */
+/** One circular gauge showing a group's share of the total. */
 function Gauge({
-  stage,
+  label,
   n,
   total,
   unit,
+  color,
   active,
+  subline,
   onPick,
 }: {
-  stage: ArrivalStatus;
+  label: string;
   n: number;
   total: number;
   unit: string;
+  color: string;
   active: boolean;
+  subline?: string;
   onPick: () => void;
 }) {
   const size = 108;
@@ -142,14 +219,13 @@ function Gauge({
   const c = 2 * Math.PI * r;
   const share = total > 0 ? Math.min(1, Math.max(0, n / total)) : 0;
   const dash = c * share;
-  const color = STAGE_COLORS[stage];
 
   return (
     <button
       type="button"
       onClick={onPick}
       aria-pressed={active}
-      aria-label={`Filter by ${stage}: ${n} of ${total} ${unit} (${pct(n, total)})`}
+      aria-label={`Filter by ${label}: ${n} of ${total} ${unit} (${pct(n, total)})`}
       className={`group flex flex-col items-center gap-1 rounded-lg p-1 text-center ${active ? "bg-surface-2 ring-1 ring-primary" : "hover:bg-surface-2"}`}
     >
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true" className="shrink-0">
@@ -165,28 +241,15 @@ function Gauge({
           strokeDasharray={`${dash} ${c - dash}`}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
-        <text
-          x={size / 2}
-          y={size / 2 + 2}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          className="fill-fg"
-          style={{ fontSize: 20, fontWeight: 600 }}
-        >
+        <text x={size / 2} y={size / 2 + 2} textAnchor="middle" dominantBaseline="middle" className="fill-fg" style={{ fontSize: 20, fontWeight: 600 }}>
           {pct(n, total)}
         </text>
-        <text
-          x={size / 2}
-          y={size / 2 + 20}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          className="fill-muted"
-          style={{ fontSize: 10 }}
-        >
+        <text x={size / 2} y={size / 2 + 20} textAnchor="middle" dominantBaseline="middle" className="fill-muted" style={{ fontSize: 10 }}>
           {n} of {total}
         </text>
       </svg>
-      <span className="max-w-28 text-xs leading-tight">{stage}</span>
+      <span className="max-w-28 text-xs leading-tight">{label}</span>
+      {subline ? <span className="max-w-28 text-[10px] leading-tight text-muted">{subline}</span> : null}
     </button>
   );
 }
@@ -196,23 +259,51 @@ function StatusCard({
   bridge,
   active,
   onPick,
+  onPickOverdue,
+  onPickClearedRecent,
+  onPickRecent,
+  overdueActive,
+  clearedRecentActive,
+  recentActive,
+  overdue,
+  clearedRecent,
+  recent,
 }: {
   rows: Shipment[];
   bridge: Bridge;
-  active: ArrivalStatus | "All";
-  onPick: (s: ArrivalStatus | "All") => void;
+  active: StatusFilter;
+  onPick: (s: StatusFilter) => void;
+  onPickOverdue: () => void;
+  onPickClearedRecent: () => void;
+  onPickRecent: () => void;
+  overdueActive: boolean;
+  clearedRecentActive: boolean;
+  recentActive: boolean;
+  overdue: { lines: number; containers: number };
+  clearedRecent: { lines: number; containers: number };
+  recent: { lines: number; containers: number };
 }) {
   const [metric, setMetric] = useState<"containers" | "shipments">("containers");
-  const parts = STAGES.map((st) => {
-    const list = rows.filter((r) => r.status === st);
-    return { st, n: metric === "containers" ? sumCtr(list, bridge) : list.length };
-  });
-  const total = parts.reduce((a, p) => a + p.n, 0);
-  const reached = parts.filter((p) => STAGES.indexOf(p.st) >= 2).reduce((a, p) => a + p.n, 0);
-  const cleared = parts[5].n;
   const unit = metric === "containers" ? "containers" : "shipments";
 
-  return (
+  const groups = CARD_GROUPS.map((g) => {
+    const list = rows.filter((r) => g.stages.includes(r.status));
+    const n = metric === "containers" ? sumCtr(list, bridge) : list.length;
+    return { key: g.key, label: g.label, n };
+  });
+  const total = metric === "containers" ? sumCtr(rows, bridge) : rows.length;
+  const atDeparture =
+    metric === "containers"
+      ? sumCtr(rows.filter((r) => r.status === STAGES[0]), bridge)
+      : rows.filter((r) => r.status === STAGES[0]).length;
+
+  const atPort =
+    (groups.find((g) => g.key === "port")?.n ?? 0) +
+    (groups.find((g) => g.key === "customs")?.n ?? 0) +
+    (groups.find((g) => g.key === "done")?.n ?? 0);
+  const cleared = groups.find((g) => g.key === "done")?.n ?? 0;
+
+    return (
     <section className="mt-3 rounded-xl border border-border bg-surface p-4" aria-label="Progress by status">
       <div className="flex flex-wrap items-center gap-3">
         <h3 className="text-sm font-semibold">Progress by status</h3>
@@ -235,37 +326,126 @@ function StatusCard({
         <p className="mt-3 text-sm text-muted">Nothing to show for these filters.</p>
       ) : (
         <>
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <div>
-              <p className="text-2xl font-semibold">{pct(reached, total)}</p>
-              <p className="text-xs text-muted">reached a Nigerian port or beyond ({reached} of {total} {unit})</p>
-            </div>
-            <div>
-              <p className="text-2xl font-semibold text-arrived">{pct(cleared, total)}</p>
-              <p className="text-xs text-muted">customs completed ({cleared} of {total} {unit})</p>
-            </div>
+          {/* Signal lines that stay above the box: cleared-recent and arrived-recent */}
+          <div className="mt-3 flex flex-col gap-1">
+            {clearedRecent.lines > 0 || clearedRecentActive ? (
+              <button
+                type="button"
+                onClick={onPickClearedRecent}
+                aria-pressed={clearedRecentActive}
+                className={`inline-flex w-fit items-center gap-2 rounded-lg border px-3 py-1.5 text-left text-sm ${
+                  clearedRecentActive
+                    ? "border-arrived bg-arrived-bg font-medium text-arrived"
+                    : "border-border text-fg hover:bg-surface-2"
+                }`}
+              >
+                <span className="text-arrived">✓</span>
+                <span>
+                  {clearedRecent.lines} cleared customs in the last {RECENT_DAYS} days ·{" "}
+                  {clearedRecent.containers} {clearedRecent.containers === 1 ? "container" : "containers"}
+                </span>
+              </button>
+            ) : null}
+
+            {recent.lines > 0 || recentActive ? (
+              <button
+                type="button"
+                onClick={onPickRecent}
+                aria-pressed={recentActive}
+                className={`inline-flex w-fit items-center gap-2 rounded-lg border px-3 py-1.5 text-left text-sm ${
+                  recentActive
+                    ? "border-primary bg-primary font-medium text-primary-ink"
+                    : "border-border text-fg hover:bg-surface-2"
+                }`}
+              >
+                <span>+</span>
+                <span>
+                  {recent.lines} arrived in the last {RECENT_DAYS} days ·{" "}
+                  {recent.containers} {recent.containers === 1 ? "container" : "containers"}
+                </span>
+              </button>
+            ) : null}
           </div>
 
-          <ul className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            {parts.map((p) => (
-              <li key={p.st} className="flex">
-                <Gauge
-                  stage={p.st}
-                  n={p.n}
-                  total={total}
-                  unit={unit}
-                  active={active === p.st}
-                  onPick={() => onPick(active === p.st ? "All" : p.st)}
-                />
-              </li>
-            ))}
+          {/* Overall completion — the headline */}
+          <div className="mt-3 rounded-lg border border-border bg-surface-2 px-3 py-2">
+            <p className="text-2xl font-semibold text-arrived">
+              {pct(cleared, total)} <span className="text-sm font-normal text-muted">{unit} cleared</span>
+            </p>
+            <p className="text-xs text-muted">
+              {cleared} of {total} {unit} · overall completion
+            </p>
+          </div>
+
+          {/* Overdue — now below the box, above the reached line */}
+          {overdue.lines > 0 || overdueActive ? (
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={onPickOverdue}
+                aria-pressed={overdueActive}
+                className={`inline-flex w-fit items-center gap-2 rounded-lg border px-3 py-1.5 text-left text-sm ${
+                  overdueActive
+                    ? "border-transit bg-transit-bg font-medium text-transit"
+                    : "border-border text-fg hover:bg-surface-2"
+                }`}
+              >
+                <span className="text-transit">⚠</span>
+                <span>
+                  {overdue.lines} {overdue.lines === 1 ? "line" : "lines"} overdue ·{" "}
+                  {overdue.containers} {overdue.containers === 1 ? "container" : "containers"}
+                </span>
+              </button>
+            </div>
+          ) : null}
+
+          {/* Reached a Nigerian port or beyond — reduced size */}
+          <div className="mt-3">
+            <p className="text-lg font-medium">{pct(atPort, total)}</p>
+            <p className="text-xs text-muted">
+              reached a Nigerian port or beyond ({atPort} of {total} {unit})
+            </p>
+          </div>
+
+          {/* Four group gauges */}
+          <ul className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {groups.map((g) => {
+              const isDone = g.key === "done";
+              return (
+                <li key={g.key} className="flex">
+                  <Gauge
+                    label={g.label}
+                    n={g.n}
+                    total={total}
+                    unit={unit}
+                    color={GROUP_COLORS[g.key]}
+                    active={active === g.key}
+                    subline={isDone ? `${pct(g.n, total)} cleared` : undefined}
+                    onPick={() => onPick(active === g.key ? "All" : g.key)}
+                  />
+                </li>
+              );
+            })}
           </ul>
+
+          {atDeparture > 0 ? (
+            <p className="mt-2 text-xs text-muted">
+              {atDeparture}{" "}
+              {metric === "containers"
+                ? atDeparture === 1
+                  ? "container"
+                  : "containers"
+                : atDeparture === 1
+                  ? "line"
+                  : "lines"}{" "}
+              still at departure port (not shown above)
+            </p>
+          ) : null}
         </>
       )}
     </section>
   );
 }
-
 export function Dashboard() {
   const [f, setF] = useState<Filters>(NO_FILTERS);
   const [view, setView] = useState<View>("shipments");
@@ -286,13 +466,29 @@ export function Dashboard() {
   const group = groups.includes(f.group) ? f.group : "All";
   const fx: Filters = { ...f, group };
 
-  const rows = useMemo(() => shipments.filter((s) => matches(s, fx)), [fx.board, fx.bridge, fx.status, fx.group, fx.query, fx.recent]);
-  const scoped = useMemo(() => shipments.filter((s) => matches(s, fx, "status")), [fx.board, fx.bridge, fx.group, fx.query, fx.recent]);
+  const rows = useMemo(
+    () => shipments.filter((s) => matches(s, fx)),
+    [fx.board, fx.bridge, fx.status, fx.group, fx.query, fx.recent, fx.overdue, fx.clearedRecent],
+  );
+  const scoped = useMemo(
+    () => shipments.filter((s) => matches(s, fx, "status")),
+    [fx.board, fx.bridge, fx.group, fx.query, fx.recent, fx.overdue, fx.clearedRecent],
+  );
 
   const totals = stat(scoped, undefined, f.bridge);
   const done = stat(scoped, DONE, f.bridge);
   const atPort = stat(scoped, PORT, f.bridge);
   const sea = stat(scoped, SEA, f.bridge);
+
+  // Filtered lists for the three signal lines (respect all filters except their own)
+  const overdueList = shipments.filter((s) => matches(s, fx, "overdue") && isOverdue(s));
+  const clearedRecentList = shipments.filter((s) => matches(s, fx, "clearedRecent") && isClearedRecent(s));
+  const recentList = shipments.filter((s) => matches(s, fx, "recent") && isRecent(s));
+  const anyList = shipments.filter((s) => matches(s, fx, "recent"));
+
+  const overdueCounts = { lines: overdueList.length, containers: sumCtr(overdueList, f.bridge) };
+  const clearedRecentCounts = { lines: clearedRecentList.length, containers: sumCtr(clearedRecentList, f.bridge) };
+  const recentCounts = { lines: recentList.length, containers: sumCtr(recentList, f.bridge) };
 
   const containerRows = useMemo(() => {
     const q = f.query.trim().toLowerCase();
@@ -369,10 +565,23 @@ export function Dashboard() {
     }
   }
 
-  const anyFilter = f.board !== "all" || f.bridge !== "All bridges" || f.status !== "All" || group !== "All" || f.query !== "" || f.recent;
-  const title = [f.bridge === "All bridges" ? "All bridges" : `Bridge ${f.bridge}`, f.board === "all" ? "both boards" : f.board === "iconic" ? "Iconic Bridges" : "General Shutter", ...(f.recent ? [`arrived in the last ${RECENT_DAYS} days`] : [])].join(" · ");
-  const recentList = shipments.filter((s) => matches(s, fx, "recent") && isRecent(s));
-  const anyList = shipments.filter((s) => matches(s, fx, "recent"));
+  const anyFilter =
+    f.board !== "all" ||
+    f.bridge !== "All bridges" ||
+    f.status !== "All" ||
+    group !== "All" ||
+    f.query !== "" ||
+    f.recent ||
+    f.overdue ||
+    f.clearedRecent;
+
+  const title = [
+    f.bridge === "All bridges" ? "All bridges" : `Bridge ${f.bridge}`,
+    f.board === "all" ? "both boards" : f.board === "iconic" ? "Iconic Bridges" : "General Shutter",
+    ...(f.overdue ? ["overdue"] : []),
+    ...(f.clearedRecent ? [`cleared in the last ${RECENT_DAYS} days`] : []),
+    ...(f.recent ? [`arrived in the last ${RECENT_DAYS} days`] : []),
+  ].join(" · ");
 
   return (
     <div className="min-h-screen bg-bg text-fg">
@@ -449,20 +658,35 @@ export function Dashboard() {
             </Section>
 
             <Section title="Arrival date">
-              <Opt active={!f.recent} onClick={() => set({ recent: false })} label="Any time" count={String(anyList.length)} />
+              <Opt active={!f.recent && !f.overdue && !f.clearedRecent} onClick={() => set({ recent: false, overdue: false, clearedRecent: false })} label="Any time" count={String(anyList.length)} />
+              <Opt
+                active={f.overdue}
+                onClick={() => set({ recent: false, clearedRecent: false, overdue: !f.overdue })}
+                label="Overdue"
+                count={`${overdueList.length} · ${sumCtr(overdueList, f.bridge)} ctr`}
+              />
               <Opt
                 active={f.recent}
-                onClick={() => set({ recent: true })}
+                onClick={() => set({ overdue: false, clearedRecent: false, recent: !f.recent })}
                 label={`Arrived in last ${RECENT_DAYS} days`}
                 count={`${recentList.length} · ${sumCtr(recentList, f.bridge)} ctr`}
               />
-              <p className="mt-1 px-1 text-xs text-muted">Counts shipments at or past “Arrived to Nigerian Port” whose Actual date is within the last {RECENT_DAYS} days.</p>
+              <Opt
+                active={f.clearedRecent}
+                onClick={() => set({ overdue: false, recent: false, clearedRecent: !f.clearedRecent })}
+                label={`Cleared in last ${RECENT_DAYS} days`}
+                count={`${clearedRecentList.length} · ${sumCtr(clearedRecentList, f.bridge)} ctr`}
+              />
+              <p className="mt-1 px-1 text-xs text-muted">
+                Overdue: expected date has passed and not yet at a Nigerian port. The two “recent” counts measure milestones hit in the last {RECENT_DAYS} days.
+              </p>
             </Section>
 
             <Section title="Shipment status">
-              {(["All", ...STAGES] as Array<ArrivalStatus | "All">).map((st) => {
-                const n = shipments.filter((s) => matches(s, fx, "status") && (st === "All" || s.status === st)).length;
-                return <Opt key={st} active={f.status === st} onClick={() => set({ status: st })} label={st} count={String(n)} />;
+              {(["All", ...STAGES] as Array<StatusFilter>).map((st) => {
+                const n = shipments.filter((s) => matches(s, { ...fx, status: st }, "status")).length;
+                const label = st === "All" ? "All" : (STAGES as readonly string[]).includes(st as string) ? (st as string) : st;
+                return <Opt key={String(st)} active={f.status === st} onClick={() => set({ status: st })} label={label} count={String(n)} />;
               })}
             </Section>
 
@@ -496,7 +720,21 @@ export function Dashboard() {
         <main className="min-w-0 flex-1 px-4 py-5 sm:px-6">
           <h2 className="text-lg font-semibold">{title}</h2>
 
-          <StatusCard rows={scoped} bridge={f.bridge} active={f.status} onPick={(st) => set({ status: st })} />
+          <StatusCard
+            rows={scoped}
+            bridge={f.bridge}
+            active={f.status}
+            onPick={(st) => set({ status: st })}
+            onPickOverdue={() => set({ overdue: !f.overdue, recent: false, clearedRecent: false })}
+            onPickClearedRecent={() => set({ clearedRecent: !f.clearedRecent, recent: false, overdue: false })}
+            onPickRecent={() => set({ recent: !f.recent, overdue: false, clearedRecent: false })}
+            overdueActive={f.overdue}
+            clearedRecentActive={f.clearedRecent}
+            recentActive={f.recent}
+            overdue={overdueCounts}
+            clearedRecent={clearedRecentCounts}
+            recent={recentCounts}
+          />
 
           <section className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
             <Stat label="Lines" value={String(totals.bls)} hint={`${totals.containers} containers`} />
@@ -510,7 +748,7 @@ export function Dashboard() {
             <ViewTab active={view === "containers"} onClick={() => { setView("containers"); setCompare(false); setLastIdx(null); }}>Containers ({containerRows.length})</ViewTab>
             <button
               type="button"
-              onClick={() => set({ recent: !f.recent })}
+              onClick={() => set({ recent: !f.recent, overdue: false, clearedRecent: false })}
               aria-pressed={f.recent}
               className={`h-11 rounded-lg border px-4 text-sm font-medium ${f.recent ? "border-arrived bg-arrived-bg text-arrived" : "border-border bg-bg text-fg hover:border-muted"}`}
             >
