@@ -193,66 +193,6 @@ function pct(n: number, total: number) {
   return `${v > 0 && v < 1 ? "<1" : Math.round(v)}%`;
 }
 
-/** One circular gauge showing a group's share of the total. */
-function Gauge({
-  label,
-  n,
-  total,
-  unit,
-  color,
-  active,
-  subline,
-  onPick,
-}: {
-  label: string;
-  n: number;
-  total: number;
-  unit: string;
-  color: string;
-  active: boolean;
-  subline?: string;
-  onPick: () => void;
-}) {
-  const size = 108;
-  const stroke = 10;
-  const r = (size - stroke) / 2;
-  const c = 2 * Math.PI * r;
-  const share = total > 0 ? Math.min(1, Math.max(0, n / total)) : 0;
-  const dash = c * share;
-
-  return (
-    <button
-      type="button"
-      onClick={onPick}
-      aria-pressed={active}
-      aria-label={`Filter by ${label}: ${n} of ${total} ${unit} (${pct(n, total)})`}
-      className={`group flex flex-col items-center gap-1 rounded-lg p-1 text-center ${active ? "bg-surface-2 ring-1 ring-primary" : "hover:bg-surface-2"}`}
-    >
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true" className="shrink-0">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-surface-2)" strokeWidth={stroke} />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          fill="none"
-          stroke={color}
-          strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeDasharray={`${dash} ${c - dash}`}
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        />
-        <text x={size / 2} y={size / 2 + 2} textAnchor="middle" dominantBaseline="middle" className="fill-fg" style={{ fontSize: 20, fontWeight: 600 }}>
-          {pct(n, total)}
-        </text>
-        <text x={size / 2} y={size / 2 + 20} textAnchor="middle" dominantBaseline="middle" className="fill-muted" style={{ fontSize: 10 }}>
-          {n} of {total}
-        </text>
-      </svg>
-      <span className="max-w-28 text-xs leading-tight">{label}</span>
-      {subline ? <span className="max-w-28 text-[10px] leading-tight text-muted">{subline}</span> : null}
-    </button>
-  );
-}
 
 function StatusCard({
   rows,
@@ -303,7 +243,12 @@ function StatusCard({
     (groups.find((g) => g.key === "done")?.n ?? 0);
   const cleared = groups.find((g) => g.key === "done")?.n ?? 0;
 
-    return (
+  const showOverdue = overdue.lines > 0 || overdueActive;
+  const showCleared = clearedRecent.lines > 0 || clearedRecentActive;
+  const showRecent = recent.lines > 0 || recentActive;
+  const anySignal = showOverdue || showCleared || showRecent;
+
+  return (
     <section className="mt-3 rounded-xl border border-border bg-surface p-4" aria-label="Progress by status">
       <div className="flex flex-wrap items-center gap-3">
         <h3 className="text-sm font-semibold">Progress by status</h3>
@@ -326,46 +271,75 @@ function StatusCard({
         <p className="mt-3 text-sm text-muted">Nothing to show for these filters.</p>
       ) : (
         <>
-          {/* Signal lines that stay above the box: cleared-recent and arrived-recent */}
-          <div className="mt-3 flex flex-col gap-1">
-            {clearedRecent.lines > 0 || clearedRecentActive ? (
-              <button
-                type="button"
-                onClick={onPickClearedRecent}
-                aria-pressed={clearedRecentActive}
-                className={`inline-flex w-fit items-center gap-2 rounded-lg border px-3 py-1.5 text-left text-sm ${
-                  clearedRecentActive
-                    ? "border-arrived bg-arrived-bg font-medium text-arrived"
-                    : "border-border text-fg hover:bg-surface-2"
-                }`}
-              >
-                <span className="text-arrived">✓</span>
-                <span>
-                  {clearedRecent.lines} cleared customs in the last {RECENT_DAYS} days ·{" "}
-                  {clearedRecent.containers} {clearedRecent.containers === 1 ? "container" : "containers"}
-                </span>
-              </button>
-            ) : null}
+          {/* Merged signal row: overdue · cleared-recent · arrived-recent */}
+          {anySignal ? (
+            <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+              {showOverdue ? (
+                <button
+                  type="button"
+                  onClick={onPickOverdue}
+                  aria-pressed={overdueActive}
+                  aria-label={`${overdue.lines} ${overdue.lines === 1 ? "line" : "lines"} overdue, ${overdue.containers} ${overdue.containers === 1 ? "container" : "containers"}`}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-left ${
+                    overdueActive
+                      ? "bg-transit-bg font-medium text-transit ring-1 ring-transit"
+                      : "text-transit hover:bg-surface-2"
+                  }`}
+                >
+                  <span aria-hidden>⚠</span>
+                  <span>
+                    {overdue.lines} overdue · {overdue.containers} ctr
+                  </span>
+                </button>
+              ) : null}
 
-            {recent.lines > 0 || recentActive ? (
-              <button
-                type="button"
-                onClick={onPickRecent}
-                aria-pressed={recentActive}
-                className={`inline-flex w-fit items-center gap-2 rounded-lg border px-3 py-1.5 text-left text-sm ${
-                  recentActive
-                    ? "border-primary bg-primary font-medium text-primary-ink"
-                    : "border-border text-fg hover:bg-surface-2"
-                }`}
-              >
-                <span>+</span>
-                <span>
-                  {recent.lines} arrived in the last {RECENT_DAYS} days ·{" "}
-                  {recent.containers} {recent.containers === 1 ? "container" : "containers"}
-                </span>
-              </button>
-            ) : null}
-          </div>
+              {showOverdue && (showCleared || showRecent) ? (
+                <span className="text-muted" aria-hidden>·</span>
+              ) : null}
+
+              {showCleared ? (
+                <button
+                  type="button"
+                  onClick={onPickClearedRecent}
+                  aria-pressed={clearedRecentActive}
+                  aria-label={`${clearedRecent.lines} cleared customs in the last ${RECENT_DAYS} days, ${clearedRecent.containers} ${clearedRecent.containers === 1 ? "container" : "containers"}`}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-left ${
+                    clearedRecentActive
+                      ? "bg-arrived-bg font-medium text-arrived ring-1 ring-arrived"
+                      : "text-arrived hover:bg-surface-2"
+                  }`}
+                >
+                  <span aria-hidden>✓</span>
+                  <span>
+                    {clearedRecent.lines} cleared in the last {RECENT_DAYS} days · {clearedRecent.containers} ctr
+                  </span>
+                </button>
+              ) : null}
+
+              {showCleared && showRecent ? (
+                <span className="text-muted" aria-hidden>·</span>
+              ) : null}
+
+              {showRecent ? (
+                <button
+                  type="button"
+                  onClick={onPickRecent}
+                  aria-pressed={recentActive}
+                  aria-label={`${recent.lines} arrived in the last ${RECENT_DAYS} days, ${recent.containers} ${recent.containers === 1 ? "container" : "containers"}`}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-left ${
+                    recentActive
+                      ? "bg-pending-bg font-medium text-pending ring-1 ring-pending"
+                      : "text-pending hover:bg-surface-2"
+                  }`}
+                >
+                  <span aria-hidden>+</span>
+                  <span>
+                    {recent.lines} arrived in the last {RECENT_DAYS} days · {recent.containers} ctr
+                  </span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
 
           {/* Overall completion — the headline */}
           <div className="mt-3 rounded-lg border border-border bg-surface-2 px-3 py-2">
@@ -377,29 +351,7 @@ function StatusCard({
             </p>
           </div>
 
-          {/* Overdue — now below the box, above the reached line */}
-          {overdue.lines > 0 || overdueActive ? (
-            <div className="mt-2">
-              <button
-                type="button"
-                onClick={onPickOverdue}
-                aria-pressed={overdueActive}
-                className={`inline-flex w-fit items-center gap-2 rounded-lg border px-3 py-1.5 text-left text-sm ${
-                  overdueActive
-                    ? "border-transit bg-transit-bg font-medium text-transit"
-                    : "border-border text-fg hover:bg-surface-2"
-                }`}
-              >
-                <span className="text-transit">⚠</span>
-                <span>
-                  {overdue.lines} {overdue.lines === 1 ? "line" : "lines"} overdue ·{" "}
-                  {overdue.containers} {overdue.containers === 1 ? "container" : "containers"}
-                </span>
-              </button>
-            </div>
-          ) : null}
-
-          {/* Reached a Nigerian port or beyond — reduced size */}
+          {/* Reached a Nigerian port or beyond — smaller */}
           <div className="mt-3">
             <p className="text-lg font-medium">{pct(atPort, total)}</p>
             <p className="text-xs text-muted">
@@ -407,25 +359,46 @@ function StatusCard({
             </p>
           </div>
 
-          {/* Four group gauges */}
-          <ul className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            {groups.map((g) => {
-              const isDone = g.key === "done";
-              return (
-                <li key={g.key} className="flex">
-                  <Gauge
-                    label={g.label}
-                    n={g.n}
-                    total={total}
-                    unit={unit}
-                    color={GROUP_COLORS[g.key]}
-                    active={active === g.key}
-                    subline={isDone ? `${pct(g.n, total)} cleared` : undefined}
-                    onPick={() => onPick(active === g.key ? "All" : g.key)}
-                  />
-                </li>
-              );
-            })}
+          {/* Stacked bar — one bar, four groups */}
+          <div
+            className="mt-4 flex h-4 overflow-hidden rounded-full bg-surface-2"
+            role="img"
+            aria-label={groups.map((g) => `${g.label} ${pct(g.n, total)}`).join(", ")}
+          >
+            {groups.map((g) =>
+              g.n > 0 ? (
+                <button
+                  key={g.key}
+                  type="button"
+                  onClick={() => onPick(active === g.key ? "All" : g.key)}
+                  aria-pressed={active === g.key}
+                  aria-label={`Filter by ${g.label}: ${g.n} of ${total} ${unit} (${pct(g.n, total)})`}
+                  title={`${g.label}: ${g.n} ${unit} (${pct(g.n, total)})`}
+                  className={`h-full transition-opacity ${active === g.key ? "opacity-100" : "opacity-90 hover:opacity-100"}`}
+                  style={{ width: `${(g.n / total) * 100}%`, backgroundColor: GROUP_COLORS[g.key] }}
+                />
+              ) : null,
+            )}
+          </div>
+
+          {/* Legend — one row, clickable, wraps cleanly */}
+          <ul className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            {groups.map((g) => (
+              <li key={g.key}>
+                <button
+                  type="button"
+                  onClick={() => onPick(active === g.key ? "All" : g.key)}
+                  aria-pressed={active === g.key}
+                  className={`inline-flex items-center gap-1.5 rounded px-1 py-0.5 ${
+                    active === g.key ? "bg-surface-2 font-medium ring-1 ring-primary" : "hover:bg-surface-2"
+                  }`}
+                >
+                  <span className="size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: GROUP_COLORS[g.key] }} aria-hidden />
+                  <span>{g.label}</span>
+                  <span className="text-muted">{pct(g.n, total)}</span>
+                </button>
+              </li>
+            ))}
           </ul>
 
           {atDeparture > 0 ? (
